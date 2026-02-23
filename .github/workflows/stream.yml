@@ -1,101 +1,99 @@
-name: Ultimate Live Stream
+name: API Auto Stream
 
 on:
   schedule:
-    # বাংলাদেশ সময় রাত ৮টা (GMT+6) = UTC 14:00
-    - cron: '0 14 * * *'
+    - cron: '0 14 * * *' # প্রতিদিন রাত ৮টা
   workflow_dispatch:
 
 jobs:
-  ultra-stream:
+  smart-stream:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: read
+
     steps:
-    - name: Checkout
+    - name: Checkout Repository
       uses: actions/checkout@v4
 
-    # স্টেপ ১: পালা এবং সময় নির্ধারণ
-    - name: Logic Calculation
-      id: logic
+    # --- আপনার পুরাতন লজিক ---
+    - name: Check Rotation (Whose Turn Is It?)
+      id: check
       run: |
-        # ----------------------------------------------
-        # নিচের সংখ্যাটি সাবধানে পরিবর্তন করুন:
-        # ১ম অ্যাকাউন্ট = 0
-        # ২য় অ্যাকাউন্ট = 1
-        # ৩য় অ্যাকাউন্ট = 2
-        # ----------------------------------------------
-        MY_ID=2 
+        # ================================
+        # অ্যাকাউন্ট ভেদে নিচের সংখ্যাটি বদলাবেন:
+        # ১ম অ্যাকাউন্ট (yusufadnan4854) -> MY_ID=0
+        # ২য় অ্যাকাউন্ট (riyonislam?)   -> MY_ID=1
+        # ৩য় অ্যাকাউন্ট                -> MY_ID=2
+        # ================================
+        MY_ID=2  
         
-        # আজকের দিন সংখ্যা ও ভাগশেষ বের করা
+        # দিনের হিসাব
         DAY_NUM=$(($(date +%s) / 86400))
         REMAINDER=$(($DAY_NUM % 3))
         
-        echo "Today's Global Remainder: $REMAINDER"
-        echo "My Account ID: $MY_ID"
-        
+        echo "Today: $REMAINDER, My ID: $MY_ID"
+
         if [ "$REMAINDER" -eq "$MY_ID" ]; then
-          echo "✅ MATCHED! Streaming Today."
-          echo "should_stream=true" >> $GITHUB_OUTPUT
+          echo "✅ It is my turn!"
+          echo "should_run=true" >> $GITHUB_OUTPUT
           
-          # র‍্যান্ডম ডিউরেশন (২ ঘণ্টা ৪৫ মি = ৯৯০০ সে, ৩ ঘণ্টা = ১০৮০০ সে)
-          RANDOM_TIME=$((RANDOM % 901))
-          DURATION=$((9900 + RANDOM_TIME))
-          echo "Total Stream Time: $DURATION seconds"
-          echo "stream_duration=$DURATION" >> $GITHUB_OUTPUT
+          # র‍্যান্ডম ডিউরেশন ক্যালকুলেশন
+          R_TIME=$((RANDOM % 901))
+          DUR=$((9900 + R_TIME))
+          echo "duration=$DUR" >> $GITHUB_OUTPUT
         else
-          echo "❌ Not my turn."
-          echo "should_stream=false" >> $GITHUB_OUTPUT
+          echo "❌ Not my turn. Skipping."
+          echo "should_run=false" >> $GITHUB_OUTPUT
         fi
 
-    - name: Install FFmpeg & Tools
-      if: steps.logic.outputs.should_stream == 'true'
-      run: sudo apt-get update && sudo apt-get install -y ffmpeg bc
+    # --- পাইথন সেটআপ এবং স্ক্রিপ্ট রান ---
+    - name: Set up Python
+      if: steps.check.outputs.should_run == 'true'
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
 
-    - name: Download Video
-      if: steps.logic.outputs.should_stream == 'true'
+    - name: Install Dependencies
+      if: steps.check.outputs.should_run == 'true'
+      run: pip install -r requirements.txt
+
+    # এই ধাপে API দিয়ে লাইভ তৈরি হবে এবং Key পাওয়া যাবে
+    - name: Create Broadcast via API
+      if: steps.check.outputs.should_run == 'true'
+      id: api_setup
+      env:
+        CLIENT_ID: ${{ secrets.CLIENT_ID }}
+        CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+        REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
+      run: python autostream.py
+
+    # --- ভিডিও এবং লাইভ ---
+    - name: Install FFmpeg & Download Video
+      if: steps.check.outputs.should_run == 'true'
       env:
         VIDEO_URL: ${{ secrets.VIDEO_URL }}
       run: |
-        echo "Downloading video..."
+        sudo apt-get update && sudo apt-get install -y ffmpeg
         wget -O video.mp4 "$VIDEO_URL"
 
-    # স্টেপ ২: প্লেলিস্ট তৈরি (যেখানে র‍্যান্ডম স্টার্ট সেট করা হবে)
-    - name: Create Magic Playlist
-      if: steps.logic.outputs.should_stream == 'true'
-      run: |
-        # ভিডিওর দৈর্ঘ্য (Duration) বের করা হচ্ছে
-        VID_LEN=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 video.mp4 | cut -d. -f1)
-        echo "Video Length: $VID_LEN seconds"
-        
-        # র‍্যান্ডম স্টার্ট পয়েন্ট ঠিক করা (ভিডিওর দৈর্ঘ্যের মধ্যে যেকোনো একটি সময়)
-        # তবে শেষের ১০ সেকেন্ড বাদ দেওয়া হলো যাতে এরর না হয়
-        MAX_START=$((VID_LEN - 10))
-        RANDOM_START=$((RANDOM % MAX_START))
-        echo "Start playing from: $RANDOM_START seconds"
-        
-        # প্লেলিস্ট তৈরি শুরু (playlist.txt)
-        echo "# Live Playlist" > playlist.txt
-        
-        # ১. প্রথম এন্ট্রি: র‍্যান্ডম সময় থেকে শেষ পর্যন্ত
-        echo "file 'video.mp4'" >> playlist.txt
-        echo "inpoint $RANDOM_START" >> playlist.txt
-        
-        # ২. লুপ এন্ট্রি: এরপর ভিডিওটি শুরু থেকে শেষ পর্যন্ত বারবার চলবে
-        # এখানে ৫০ বার দেওয়া হলো যাতে ৬ ঘণ্টার বেশি ব্যাকআপ থাকে
-        for i in {1..50}; do
-          echo "file 'video.mp4'" >> playlist.txt
-        done
-        
-        echo "Playlist created successfully!"
-
     - name: Start Streaming
-      if: steps.logic.outputs.should_stream == 'true'
+      if: steps.check.outputs.should_run == 'true'
       timeout-minutes: 190
       env:
-        STREAM_URL: ${{ secrets.STREAM_URL }}
-        STREAM_KEY: ${{ secrets.STREAM_KEY }}
-        TOTAL_TIME: ${{ steps.logic.outputs.stream_duration }}
+        # পাইথন স্ক্রিপ্ট থেকে জেনারেট হওয়া URL এবং Key এখানে আসছে
+        RTMP_URL: ${{ steps.api_setup.outputs.server_url }}
+        KEY: ${{ steps.api_setup.outputs.stream_key }}
+        TIME: ${{ steps.check.outputs.duration }}
       run: |
-        echo "Streaming started..."
-        # -f concat ব্যবহার করা হচ্ছে প্লেলিস্ট চালানোর জন্য
-        ffmpeg -re -f concat -safe 0 -i playlist.txt -t $TOTAL_TIME -c:v libx264 -preset veryfast -b:v 3000k -maxrate 3000k -bufsize 6000k -pix_fmt yuv420p -g 50 -c:a aac -b:a 128k -ar 44100 -f flv "$STREAM_URL/$STREAM_KEY"
+        # প্লেলিস্ট তৈরি (শুরুর র‍্যান্ডম পয়েন্ট সহ লুপ)
+        VID_LEN=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 video.mp4 | cut -d. -f1)
+        MAX_START=$((VID_LEN - 10))
+        R_START=$((RANDOM % MAX_START))
+        
+        echo "# Playlist" > list.txt
+        echo "file 'video.mp4'" >> list.txt
+        echo "inpoint $R_START" >> list.txt
+        for i in {1..50}; do echo "file 'video.mp4'" >> list.txt; done
+
+        # আসল স্ট্রিম কমান্ড
+        ffmpeg -re -f concat -safe 0 -i list.txt -t $TIME -c:v libx264 -preset veryfast -b:v 3000k -maxrate 3000k -bufsize 6000k -pix_fmt yuv420p -g 50 -c:a aac -b:a 128k -ar 44100 -f flv "$RTMP_URL/$KEY"
